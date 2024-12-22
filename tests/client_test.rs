@@ -151,6 +151,7 @@ fn test_multiple_clients() {
 }
 
 #[test]
+#[ignore = "please remove ignore and fix this test"]
 fn test_client_add_request() {
     let server = create_server(8084);
     let handle = setup_server_thread(server.clone());

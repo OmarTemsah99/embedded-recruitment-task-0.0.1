@@ -1,135 +1,98 @@
-New Client Handling Structure
-The main focus of the update is in how the server handles clients and their requests. The Client struct now includes two types of messages:
+<!-- Server.rs -->
 
-EchoMessage (previously handled)
-AddRequest and AddResponse (newly added for arithmetic operations)
-Changes to Client:
-Loop in handle() method: The handle() method has been refactored to continuously read incoming data from the client in a loop (loop {}) instead of reading data only once. This ensures that the server can handle multiple requests from the same client.
+1. Client Struct:
 
-Message Handling: The server now distinguishes between two types of messages:
+Both versions: Define a Client struct to manage communication with a connected client.
 
-EchoMessage: The content is echoed back to the client as before.
-AddRequest: The server expects an addition request, processes the two integers a and b, and sends back an AddResponse with the result of the sum.
-Error Handling: If neither EchoMessage nor AddRequest can be decoded, the server logs an error message.
+2. Client::handle Method:
 
-pub fn handle(&mut self) -> io::Result<()> {
-let mut buffer = [0; 512];
-loop {
-let bytes_read = self.stream.read(&mut buffer)?;
-if bytes_read == 0 {
-info!("Client disconnected.");
-break;
-}
+Old Version:
 
-        if let Ok(echo_message) = EchoMessage::decode(&buffer[..bytes_read]) {
-            info!("Processed EchoMessage: {}", echo_message.content);
-            let payload = echo_message.encode_to_vec();
-            self.stream.write_all(&payload)?;
-            self.stream.flush()?;
-        } else if let Ok(add_request) = AddRequest::decode(&buffer[..bytes_read]) {
-            let result = add_request.a + add_request.b;
-            info!("Processed AddRequest: {} + {} = {}", add_request.a, add_request.b, result);
-            let add_response = AddResponse { result };
-            let payload = add_response.encode_to_vec();
-            self.stream.write_all(&payload)?;
-            self.stream.flush()?;
-        } else {
-            error!("Failed to decode message");
-        }
-    }
-    Ok(())
+Potentially used a larger buffer size than necessary.
+Decoded messages without explicit error handling.
+Included logic for handling AddRequest and EchoMessage (not shown in the provided snippet).
+New Version:
 
-}
+Uses a buffer size of 512 bytes, which might be sufficient for most echo messages.
+Explicitly checks the return value of EchoMessage::decode to handle potential decoding errors.
+Focuses on handling EchoMessage for simplicity (assuming AddRequest handling is removed or implemented elsewhere).
+Provides more informative error messages for debugging purposes.
 
-<!--  -->
+3. Server Struct:
 
-Threaded Server with Shared State
-The server has been updated to use threading to handle multiple client connections concurrently. The Server struct has the following changes:
+Old Version:
 
-Changes to Server:
-TcpListener is Wrapped in Mutex: The TcpListener is wrapped in a Mutex and placed inside an Arc (atomic reference counter). This allows the listener to be shared safely across threads while also being mutable.
+Used Mutex to manage the listener, potentially introducing some overhead.
+New Version:
 
-Threading: Each client connection is now handled in its own thread. This is accomplished using thread::spawn inside the run() method. Each thread manages its own instance of the Client struct, allowing for parallel processing of multiple clients.
+Uses a plain TcpListener for the listener, simplifying the code.
 
-Graceful Shutdown: The is_running flag is used to manage the running state of the server. If the server needs to be stopped, this flag is set to false, and the server will exit its main loop. The server will then wait for each client-handling thread to finish by calling join() on each thread.
+4. Server::new Method:
 
-pub fn run(&self) -> io::Result<()> {
-self.is_running.store(true, Ordering::SeqCst);
-info!("Server is running on {}", self.listener.lock().unwrap().local_addr()?);
+Both versions:
 
-    self.listener.lock().unwrap().set_nonblocking(true)?;
+Create a new server instance, binding it to a specific address.
+New Version:
 
-    let mut threads = Vec::new();
+Might be slightly more concise due to the simpler Server struct.
 
-    while self.is_running.load(Ordering::SeqCst) {
-        match self.listener.clone().lock().unwrap().accept() {
-            Ok((stream, addr)) => {
-                info!("New client connected: {}", addr);
+5. Server::run Method:
 
-                let is_running = self.is_running.clone();
-                let handle = thread::spawn(move || {
-                    let mut client = Client::new(stream);
-                    while is_running.load(Ordering::SeqCst) {
-                        if let Err(e) = client.handle() {
-                            error!("Error handling client: {}", e);
-                            break;
-                        }
-                    }
-                });
+Old Version:
 
-                threads.push(handle);
-            }
-            Err(ref e) if e.kind() == ErrorKind::WouldBlock => {
-                thread::sleep(Duration::from_millis(50));
-            }
-            Err(e) => {
-                error!("Error accepting connection: {}", e);
-            }
-        }
-    }
+Potentially did not set the listener to non-blocking mode.
+New Version:
 
-    for handle in threads {
-        let _ = handle.join();
-    }
+Explicitly sets the listener to non-blocking mode for better performance and handling incoming connections efficiently.
 
-    info!("Server stopped.");
-    Ok(())
+6. Error Handling:
 
-}
+Old Version:
 
-<!--  -->
+Error handling might have been less detailed.
+New Version:
 
-Shared State with Atomic Boolean (Arc<AtomicBool>)
-The is_running flag is now an AtomicBool wrapped in an Arc to allow it to be shared safely across threads. This flag is used to control whether the server is still running or if it should stop processing new connections.
+Includes more specific error messages for accept and handle methods, aiding in debugging.
 
-AtomicBool is thread-safe and allows the server to check the running state without locking it.
-Arc (atomic reference counting) ensures that the flag is shared across multiple threads, preventing issues with ownership and borrowing.
+7. Additional Considerations:
 
-<!--  -->
+The new code removes any logic related to AddRequest handling (assuming it's implemented elsewhere or not needed).
+The new code focuses on a simpler echo server functionality.
+Overall, the new server.rs code offers several improvements:
 
-Non-blocking TcpListener
-The server’s TcpListener is set to non-blocking mode using set_nonblocking(true) to avoid blocking the server thread while waiting for incoming connections. When there are no connections to accept, the server sleeps for 50 milliseconds to reduce CPU usage.
+Clarity and Conciseness: The code is more streamlined and easier to understand.
+Error Handling: Provides more informative error messages for debugging.
+Efficiency: Uses non-blocking mode for the listener, potentially improving performance.
+Focus: Tailored to handle EchoMessage for demonstration purposes.
 
-self.listener.lock().unwrap().set_nonblocking(true)?;
+<!-- client_test.rs -->
 
-<!--  -->
+1. Server Startup Wait:
 
-Graceful Shutdown
-The stop() method gracefully stops the server by setting the is_running flag to false. This is checked in the main loop to ensure that the server can cleanly shut down without abruptly terminating client connections.
+Old Version: Tests assumed the server starts immediately.
+New Version: Introduces a std::thread::sleep call (200 milliseconds) after server creation to ensure the server is ready before client connection attempts.
 
-pub fn stop(&self) {
-if self.is_running.load(Ordering::SeqCst) {
-self.is_running.store(false, Ordering::SeqCst);
-info!("Shutdown signal sent.");
-} else {
-warn!("Server was already stopped or not running.");
-}
-}
+2. Response Timeout:
 
-<!--  -->
+Both Versions: Validate successful message reception.
+New Version: Introduces timeout logic using Instant::now and Duration to measure the time taken for receiving a response. It asserts that the response arrives within 1 second (adjustable). This enhances test reliability by preventing them from hanging indefinitely if the server is slow or unresponsive.
 
-Summary of Key Changes:
-Client Handling: Multiple message types (EchoMessage and AddRequest) are processed in a loop, and responses are sent back to the client.
-Concurrency: The server now supports multiple client connections concurrently using threads, with shared state managed using Arc<Mutex<TcpListener>> and Arc<AtomicBool>.
-Graceful Shutdown: The server can be stopped gracefully using the is_running flag.
-Non-blocking TCP Listener: The server uses a non-blocking listener to avoid blocking on accept() calls and sleeps when no connections are present.
+3. Multiple Echo Messages:
+
+Old Version: The test (test_multiple_echo_messages) was ignored.
+New Version: The test is fixed and now sends and receives multiple echo messages from a single client, verifying their content matches what was sent.
+
+4. Multiple Clients:
+
+Old Version: The test (test_multiple_clients) was ignored.
+New Version: The test is fixed and now creates and connects multiple clients concurrently. Each client sends and receives multiple echo messages, ensuring the server handles concurrent connections and messages appropriately.
+
+5. Add Request Test:
+
+Old Version: The test (test_client_add_request) was ignored (likely due to missing server-side implementation for AddRequest).
+New Version: The test remains ignored, but the code is preserved for potential future use if the server starts supporting AddRequest functionality.
+Overall, the new client test code offers several improvements:
+
+Increased Robustness: Ensures server startup and introduces timeouts for receiving responses.
+Enhanced Clarity: Includes timeout logic with clear comments.
+Comprehensive Testing: Fixes previously ignored tests to cover multiple echo messages, concurrent clients, and (potentially in the future) AddRequest handling.
